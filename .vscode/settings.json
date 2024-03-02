@@ -1,0 +1,12 @@
+{
+    "cSpell.words": [
+        "furnify",
+        "jnogzo",
+        "psycopg",
+        "whfnu"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.python"
+    },
+    "python.formatting.provider": "none"
+}

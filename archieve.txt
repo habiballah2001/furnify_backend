@@ -1,0 +1,388 @@
+Show orders View:
+@api_view(['GET',])
+@permission_classes([IsAuthenticated])
+def show_orders(request):
+    all_orders = Order.objects.all().filter(user=request.user).exists()
+    if all_orders == True:
+        all_orders = Order.objects.all().filter(user=request.user)
+        for x in all_orders:
+            order = Order.objects.get(id=x.id)
+            orderdetails = OrderDetails.objects.all().filter(order=order)
+
+            total = 0
+            for sub in orderdetails:
+                total += sub.price * sub.quantity
+
+            order_details_serializer = OrderDetailsSerializer(
+                orderdetails, many=True)
+            x.total = total
+            x.items_count = order_details_serializer.data.count
+            serializer = OrderSerializer(order)
+
+            return Response(serializer.data)
+
+Add to cart View:
+
+@api_view(['POST',])
+@permission_classes([IsAuthenticated])
+def add_to_cart(request):
+    product_id = request.data.get('product_id')
+    quantity = request.data.get('quantity')
+
+    if not product_id or not quantity:
+        return Response({'error': 'Missing product_id or quantity.'}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+
+        order = Order.objects.filter(
+            user=request.user, is_finished=False).exists()
+        product = Product.objects.get(pk=product_id)
+
+        if order == True:
+            order = Order.objects.get(user=request.user, is_finished=False)
+            orderdetails = OrderDetails.objects.filter(
+                order=order, product=product).exists()
+
+            if orderdetails == True:
+                # Update the existing order details
+                order_details = OrderDetails.objects.get(
+                    order=order, product=product)
+                order_details.quantity += int(quantity)
+                order_details.price += order_details.price*int(quantity)
+                order_details_serializer = OrderDetailsSerializer(
+                    data=order_details)
+                if order_details_serializer.is_valid():
+                    order_details_serializer.save()
+                    return Response(order_details_serializer.data)
+        else:
+            # Create a new order details object
+            order = Order.objects.create(
+                user=request.user, order_date=timezone.now(), is_finished=False)
+            order_details = OrderDetails.objects.create(
+                order=order, product=product, price=product.price, quantity=quantity)
+            order_details_serializer = OrderDetailsSerializer(
+                data=order_details)
+            if order_details_serializer.is_valid():
+                order_details_serializer.save()
+
+        serializer = OrderSerializer(order)
+        response_data = {
+            'order': serializer.data,
+            'order_details': order_details_serializer.data
+        }
+        # Return a redirect response to the cart page
+        return Response(response_data, status=status.HTTP_302_FOUND, headers={'Location': reverse('cart')})
+
+
+Cart View:
+
+
+@api_view(['GET',])
+@permission_classes([IsAuthenticated])
+def cart(request):
+    if Order.objects.all().filter(user=request.user, is_finished=False).exists():
+        order = Order.objects.get(user=request.user, is_finished=False)
+        serializer = OrderSerializer(order)
+        order_details = OrderDetails.objects.all().filter(order=order)
+        order_details_serializer = OrderDetailsSerializer(
+            order_details, many=True)
+        total = sum(sub.price * sub.quantity for sub in order_details)
+        context = {
+            'order': serializer.data,
+            'order_details': order_details_serializer.data,
+            'total': total,
+        }
+        return Response(context, status=status.HTTP_200_OK)
+    else:
+        return Response({'error': 'No items in cart.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+
+List,search
+class product_list(generics.ListAPIView):
+    permission_classes = [AllowAny]
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name', 'description', 'price']
+
+
+User Profile:
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def profile(request):
+    if request.method == 'GET':
+        userprofile = UserProfile.objects.get(user=request.user)
+        serializer = UserProfileSerializer(userprofile)
+        return Response(serializer.data)
+    if request.method == 'PUT':
+        user = request.user
+        userprofile = UserProfile.objects.get(user=user)
+        password = request.data.get('password')
+        if not password.startswith('pbkdf2_sha256$'):
+            request.user.set_password(request.data.get('password'))
+
+        user_serializer = UserSerializer(user, data=request.data, partial=True)
+        userprofile_serializer = UserProfileSerializer(
+            userprofile, data=request.data, partial=True)
+
+        user_serializer.is_valid()
+        userprofile_serializer.is_valid()
+
+        if user_serializer.is_valid() and userprofile_serializer.is_valid():
+            auth.login(request, request.user)
+            user_serializer.save()
+            userprofile_serializer.save()
+
+            response_data = {
+                # 'user': user_serializer.validated_data,
+                'user_profile': userprofile_serializer.validated_data
+            }
+            return Response(response_data)
+        else:
+            return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+Serializer account:
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        exclude = ['id']
+
+
+class CitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = City
+        fields = '__all__'
+
+
+class RegistrationSerializer(serializers.ModelSerializer):
+    password2 = serializers.CharField(
+        style={'input_type': 'password'}, write_only=True)
+    phone = serializers.CharField(write_only=True)
+    address = serializers.CharField(write_only=True)
+    city = serializers.PrimaryKeyRelatedField(
+        queryset=City.objects.all(), write_only=True) 
+
+    class Meta:
+        model = User
+        fields = ['username', 'first_name', 'last_name', 'email', 'password',
+                  'password2', 'phone', 'city', 'address']
+        extra_kwargs = {
+            'password': {'write_only': True}
+        }
+
+    def validate(self, data):
+        password = data.get('password')
+        password2 = data.pop('password2', None)
+
+        if password != password2:
+            raise serializers.ValidationError(
+                {'error': 'P1 and P2 should be the same'})
+        if User.objects.filter(email=data['email']).exists():
+            raise serializers.ValidationError(
+                {'error': 'Email already exists'})
+
+        return data
+
+    def create(self, validated_data):
+        phone = validated_data.pop('phone', None)
+        address = validated_data.pop('address', None)
+        city = validated_data.pop('city', None)
+
+        user = User(**validated_data)
+        user.set_password(validated_data['password'])
+        user.save()
+
+        user_profile = UserProfile(
+            user=user, phone=phone, city=city, address=address)
+        user_profile.save()
+
+        return user
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField(read_only=True)
+    username = serializers.CharField(source='user.username')
+    email = serializers.CharField(source='user.email')
+    phone = serializers.CharField()
+    city = serializers.CharField(source='city.name')
+
+    class Meta:
+        model = UserProfile
+        # fields = '__all__'
+        exclude = ['id', 'product_favorites']
+
+    def update(self, instance, validated_data):
+        city_data = validated_data.pop('city', None)
+        if city_data:
+            city_name = city_data.get('name')
+            if city_name:
+                city = City.objects.get(name=city_name)
+                instance.city = city
+
+        instance.phone = validated_data.get('phone', instance.phone)
+        instance.save()
+        return instance
+
+
+Services
+    description = models.CharField(max_length=100)
+    photo = models.ImageField(upload_to='photos/service/%Y/%m/%d/')
+    is_available = models.BooleanField(default=True)
+    category = models.ForeignKey(
+        Service_Category, on_delete=models.CASCADE, related_name=service)
+    created = models.DateTimeField(auto_now_add=True)
+    update = models.DateTimeField(auto_now=True)
+
+
+
+Admin Products:
+    path('add_product/', views.add_product, name='add_product'),
+    path('edit_product/<int:pk>/', views.edit_product, name='edit_product'),
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
+def add_product(request):
+    if request.method == 'POST':
+        serializer = ProductSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        else:
+            return Response(serializer.errors)
+
+@api_view(['PUT', 'DELETE'])
+@permission_classes([IsAdminUser])
+def edit_product(request, pk):
+    if request.method == 'PUT':
+        product = Product.objects.get(pk=pk)
+        serializer = ProductSerializer(
+            product, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        else:
+            return Response(serializer.errors)
+
+    if request.method == 'DELETE':
+        product = Product.objects.get(pk=pk)
+        product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+colors
+:root {
+    --primary: #333d47;
+    --secondary: #333d47;
+    --accent: #fff;
+    --primary-fg: #fff;
+
+    --body-fg: #333;
+    --body-bg: #d8e5ed;
+    --body-quiet-color: #666;
+    --body-loud-color: #000;
+
+    --header-color: #ffc;
+    --header-branding-color: var(--accent);
+    --header-bg: var(--secondary);
+    --header-link-color: var(--primary-fg);
+
+    --breadcrumbs-fg: #c4dce8;
+    --breadcrumbs-link-fg: var(--body-bg);
+    --breadcrumbs-bg: var(--primary);
+
+    --link-fg: #417893;
+    --link-hover-color: #036;
+    --link-selected-fg: #5b80b2;
+
+    --hairline-color: #e8e8e8;
+    --border-color: #ccc;
+
+    --error-fg: #ba2121;
+
+    --message-success-bg: #dfd;
+    --message-warning-bg: #ffc;
+    --message-error-bg: #ffefef;
+
+    --darkened-bg: #f0f8ff; /* A bit darker than --body-bg */
+    --selected-bg: #e4e4e4; /* E.g. selected table cells */
+    --selected-row: #ffc;
+
+    --button-fg: #fff;
+    --button-bg: var(--primary);
+    --button-hover-bg: #609ab6;
+    --default-button-bg: var(--secondary);
+    --default-button-hover-bg: #205067;
+    --close-button-bg: #747474;
+    --close-button-hover-bg: #333;
+    --delete-button-bg: #ba2121;
+    --delete-button-hover-bg: #a41515;
+
+    --object-tools-fg: var(--button-fg);
+    --object-tools-bg: var(--close-button-bg);
+    --object-tools-hover-bg: var(--close-button-hover-bg);
+
+    --font-family-primary:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        system-ui,
+        Roboto,
+        "Helvetica Neue",
+        Arial,
+        sans-serif,
+        "Apple Color Emoji",
+        "Segoe UI Emoji",
+        "Segoe UI Symbol",
+        "Noto Color Emoji";
+    --font-family-monospace:
+        ui-monospace,
+        Menlo,
+        Monaco,
+        "Cascadia Mono",
+        "Segoe UI Mono",
+        "Roboto Mono",
+        "Oxygen Mono",
+        "Ubuntu Monospace",
+        "Source Code Pro",
+        "Fira Mono",
+        "Droid Sans Mono",
+        "Courier New",
+        monospace,
+        "Apple Color Emoji",
+        "Segoe UI Emoji",
+        "Segoe UI Symbol",
+        "Noto Color Emoji";
+}
+
+
+Product Details:
+    path('<int:pk>/', views.product_detail, name='product_detail'),
+@api_view(['GET', 'PUT', 'DELETE'])
+def product_detail(request, pk):
+    try:
+        product = Product.objects.get(pk=pk)
+    except Product.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = ProductSerializer(product)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        serializer = ProductSerializer(
+            product, data=request.data, partial=True)
+        if serializer.is_valid():
+            on_sale = serializer.validated_data.get('on_sale', False)
+            if on_sale:
+                discount = Discount.objects.filter(product=product).first()
+                if discount:
+                    serializer.validated_data['price'] = product.price * \
+                        (1 - discount.discount / 100)
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'DELETE':
+        product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

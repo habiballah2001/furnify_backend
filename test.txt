@@ -1,0 +1,189 @@
+D:\Uni\Graduation Project\furnify\static
+
+
+
+class CitySerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = City
+        fields = '__all__'
+
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = '__all__'
+
+    def save(self):
+        if User.objects.filter(email=self.validated_data['email']).exists():
+            user = User.objects.filter(email=self.validated_data['email'])
+            if user == User.objects.get(email=self.validated_data['email']):
+                account = User(
+                    email=self.validated_data['email'], username=self.validated_data['username'])
+                account.save()
+
+            return account
+
+
+class CitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = City
+        fields = '__all__'
+
+
+class RegistrationSerializer(serializers.ModelSerializer):
+    password2 = serializers.CharField(
+        style={'input_type': 'password'}, write_only=True)
+    phone = serializers.CharField(write_only=True)
+    address = serializers.CharField(write_only=True)
+    city = serializers.PrimaryKeyRelatedField(
+        queryset=City.objects.all(), write_only=True)
+
+    class Meta:
+        model = User
+        fields = ['username', 'first_name', 'last_name', 'email', 'password',
+                  'password2', 'phone', 'city', 'address']
+        extra_kwargs = {
+            'password': {'write_only': True}
+        }
+
+    def validate(self, data):
+        password = data.get('password')
+        password2 = data.pop('password2', None)
+
+        if password != password2:
+            raise serializers.ValidationError(
+                {'error': 'P1 and P2 should be the same'})
+        if User.objects.filter(email=data['email']).exists():
+            raise serializers.ValidationError(
+                {'error': 'Email already exists'})
+
+        return data
+
+    def create(self, validated_data):
+        phone = validated_data.pop('phone', None)
+        address = validated_data.pop('address', None)
+        city = validated_data.pop('city', None)
+
+        user = User(**validated_data)
+        user.set_password(validated_data['password'])
+        user.save()
+
+        user_profile = UserProfile(
+            user=user, phone=phone, city=city, address=address)
+        user_profile.save()
+
+        return user, user_profile
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    city = serializers.CharField(source='city.name')
+    user = serializers.StringRelatedField(read_only=True)
+    username = serializers.CharField(source='user.username')
+    email = serializers.CharField(source='user.email')
+    phone = serializers.CharField(source='user.phone')
+
+    class Meta:
+        model = UserProfile
+        # fields = '__all__'
+        exclude = ['product_favorites']
+
+
+
+@api_view(['POST'])
+def registration_view(request):
+    if request.method == 'POST':
+        city_serializer = CitySerializer(data=request.data)
+        city_serializer.is_valid(raise_exception=True)
+        city = city_serializer.save()
+
+        request.data['city'] = city.id
+
+        user_serializer = RegistrationSerializer(data=request.data)
+        user_serializer.is_valid(raise_exception=True)
+        user = user_serializer.save()
+
+        profile_data = request.data.get('profile', {})
+        profile_data['user'] = user.id
+        profile_data['city'] = city.id
+        profile_serializer = UserProfileSerializer(data=profile_data)
+        profile_serializer.is_valid(raise_exception=True)
+        profile = profile_serializer.save()
+
+        response_data = {
+            'user': user_serializer.data,
+            'profile': profile_serializer.data
+        }
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+# @api_view(['POST',])
+# def signup(request):
+#     firstname = None
+#     lastname = None
+#     address = None
+#     city = None
+#     email = None
+#     username = None
+#     password = None
+#     password2 = None
+#     if 'firstname' in request.POST:
+#         fname = request.POST['firstname']
+#     else:
+#         raise ValidationError("Error in Firstname")
+#     if 'lastname' in request.POST:
+#         lastname = request.POST['lastname']
+#     else:
+#         raise ValidationError("Error in Lastname")
+#     if 'address' in request.POST:
+#         address = request.POST['address']
+#     else:
+#         raise ValidationError("Error in Address")
+#     if 'city' in request.POST:
+#         city = request.POST['city']
+#     else:
+#         raise ValidationError("Error in City")
+#     if 'email' in request.POST:
+#         email = request.POST['email']
+#     else:
+#         raise ValidationError("Error in Email")
+#     if 'username' in request.POST:
+#         username = request.POST['username']
+#     else:
+#         raise ValidationError("Error in Username")
+#     if 'password' in request.POST:
+#         password = request.POST['password']
+#     else:
+#         raise ValidationError("Error in Password")
+#     if 'password2' in request.POST:
+#         password2 = request.POST['password2']
+#     else:
+#         raise ValidationError("Error in Password2")
+#         user = User.objects.create_user(
+#             first_name=fname, last_name=lname, email=email, username=username, password=password, password2=password2)
+#         serializer = RegistrationSerializer(data=user)
+#         if serializer.is_valid():
+#             serializer.save()
+#             return Response(serializer.data)
+#         # add user profile
+#         userprofile = UserProfile(
+#             user=user, address=address, city=city)
+#         userprofile_serializer = UserProfileSerializer(data=userprofile)
+#         if userprofile_serializer.is_valid():
+#             userprofile_serializer.save()
+#             return Response(userprofile_serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+can you provide few more examples of data to test with like this with completely different data:
+{
+"username": "charlie",
+"email": "charlie@example.com",
+"first_name": "Charlie",
+"last_name": "Brown",
+"password": "mypassword",
+"password2": "mypassword",
+"phone": "555-5555",
+"address": "555 Oak St",
+"city": 5
+}
